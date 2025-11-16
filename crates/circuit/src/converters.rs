@@ -13,6 +13,7 @@
 #[cfg(feature = "cache_pygates")]
 use std::sync::OnceLock;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::intern;
 use pyo3::prelude::*;
 
@@ -54,7 +55,54 @@ pub fn circuit_to_dag(
     qubit_order: Option<Vec<ShareableQubit>>,
     clbit_order: Option<Vec<ShareableClbit>>,
 ) -> PyResult<DAGCircuit> {
-    DAGCircuit::from_circuit(quantum_circuit, copy_operations, qubit_order, clbit_order)
+    // Map ShareableQubit/ShareableClbit to Qubit/Clbit indices
+    // Optimized: Pre-allocate Vecs and get registry reference once to avoid repeated lookups
+    let qubit_order_mapped = if let Some(order) = qubit_order {
+        let qubits_registry = quantum_circuit.data.qubits();
+        let mut mapped = Vec::with_capacity(order.len());
+        for shareable_qubit in order {
+            mapped.push(
+                qubits_registry
+                    .find(&shareable_qubit)
+                    .ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "Qubit {:?} not found in circuit",
+                            shareable_qubit
+                        ))
+                    })?,
+            );
+        }
+        Some(mapped)
+    } else {
+        None
+    };
+
+    let clbit_order_mapped = if let Some(order) = clbit_order {
+        let clbits_registry = quantum_circuit.data.clbits();
+        let mut mapped = Vec::with_capacity(order.len());
+        for shareable_clbit in order {
+            mapped.push(
+                clbits_registry
+                    .find(&shareable_clbit)
+                    .ok_or_else(|| {
+                        PyValueError::new_err(format!(
+                            "Clbit {:?} not found in circuit",
+                            shareable_clbit
+                        ))
+                    })?,
+            );
+        }
+        Some(mapped)
+    } else {
+        None
+    };
+
+    DAGCircuit::from_circuit(
+        quantum_circuit,
+        copy_operations,
+        qubit_order_mapped,
+        clbit_order_mapped,
+    )
 }
 
 #[pyfunction(signature = (dag, copy_operations = true))]
